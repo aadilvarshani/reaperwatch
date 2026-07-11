@@ -1,0 +1,73 @@
+# ==============================================================================
+# ReaperWatch .gitignore
+# Rule of thumb: never track anything that is regenerated from source.
+# ==============================================================================
+
+# --- Build directories (out-of-source builds) --------------------------------
+build/
+out/
+cmake-build-*/
+Debug/
+Release/
+x64/
+x86/
+
+# --- CMake generated files (in case of accidental in-source configure) -------
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+
+# --- C/C++ compiled objects & binaries ---------------------------------------
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.a
+*.exp
+*.ilk
+
+# --- MSVC debug / intermediate symbols ---------------------------------------
+*.pdb
+*.idb
+*.ipdb
+*.iobj
+*.pch
+*.tlog
+*.log
+
+# --- Kernel driver build artifacts (Phase 2) ---------------------------------
+# NOTE: real *.sys are build outputs. The current driver/reaperwatch.sys is a
+# tracked placeholder; revisit these rules when the driver build lands.
+*.cer
+*.inf.pdb
+*/Debug/*.sys
+*/Release/*.sys
+
+# --- Visual Studio / VS Code machine-specific state --------------------------
+.vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# --- Python (backend / tooling) ----------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- OS noise ----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Local secrets / environment (never commit) ------------------------------
+*.env
+.env
+*.pem
+*.key
+secrets.*
