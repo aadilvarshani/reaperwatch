@@ -50,4 +50,14 @@ struct FileSignature {
 // with is_signed == false.
 FileSignature get_file_signature(const std::string& path);
 
+// Return this machine's host context (hostname, OS, architecture). Values are
+// constant for the machine's lifetime, so callers may compute this once and cache
+// it rather than per event.
+HostContext get_host_context();
+
+// Assemble a fully-enriched process_create event for the given PID: run every
+// enrichment step (path, command line, lineage, user, hashes, signature, host)
+// and stamp the envelope (event_type, timestamp, sequence_id).
+ProcessEvent build_process_event(std::uint32_t pid);
+
 }  // namespace reaperwatch

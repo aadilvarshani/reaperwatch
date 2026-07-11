@@ -1,11 +1,16 @@
 add_library(reaperwatch_collectors
     process_monitor.cpp
+    event_json.cpp
     file_monitor.cpp
     network_monitor.cpp
     registry_monitor.cpp
 )
 
-target_include_directories(reaperwatch_collectors PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# ${CMAKE_SOURCE_DIR}/third_party holds vendored header-only deps (nlohmann/json).
+target_include_directories(reaperwatch_collectors PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party
+)
 
 # ntdll    -> NtQueryInformationProcess (declared in <winternl.h>)
 # advapi32 -> token/SID APIs: OpenProcessToken, LookupAccountSid, ConvertSidToStringSid

@@ -10,6 +10,8 @@
 #include <softpub.h>   // WINTRUST_ACTION_GENERIC_VERIFY_V2
 #include <mscat.h>     // CryptCATAdmin* system-catalog verification
 
+#include <atomic>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -495,6 +497,120 @@ FileSignature get_file_signature(const std::string& path) {
         result.is_signed = verify_via_catalog(wpath, result.signer);
     }
     return result;
+}
+
+// Collect this machine's host context. See header for the caching note.
+HostContext get_host_context() {
+    HostContext host;
+
+    // ── GAP 1: hostname (two-call pattern) ──────────────────────────────────
+    // GetComputerNameExW(ComputerNamePhysicalDnsHostname, ...):
+    //   DWORD size = 0;
+    //   GetComputerNameExW(ComputerNamePhysicalDnsHostname, nullptr, &size);
+    //   std::wstring name(size, L'\0');
+    //   if (GetComputerNameExW(ComputerNamePhysicalDnsHostname, name.data(), &size)) {
+    //       name.resize(size);                 // size now excludes the null
+    //       host.hostname = narrow(name);
+    //   }
+    // TODO(gap1): fill in the hostname lookup.
+    // ────────────────────────────────────────────────────────────────────────
+    DWORD size = 0;
+    GetComputerNameExW(ComputerNamePhysicalDnsHostname, nullptr, &size);
+    std::wstring name(size, L'\0');
+    if (GetComputerNameExW(ComputerNamePhysicalDnsHostname, name.data(), &size)) {
+        name.resize(size);
+        host.hostname = narrow(name);
+    }
+
+    // OS version: GetVersionEx lies (caps at 6.2 without a manifest), so we call
+    // the real RtlGetVersion from ntdll, loaded dynamically.
+    OSVERSIONINFOW osv{};
+    osv.dwOSVersionInfoSize = sizeof(osv);
+    const auto rtl_get_version = reinterpret_cast<LONG(WINAPI*)(OSVERSIONINFOW*)>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
+    if (rtl_get_version && rtl_get_version(&osv) == 0) {  // 0 == STATUS_SUCCESS
+        std::string name = "Windows";
+        if (osv.dwMajorVersion == 10 && osv.dwBuildNumber >= 22000) {
+            name += " 11";  // Win 10 and 11 both report major==10; build splits them
+        } else if (osv.dwMajorVersion == 10) {
+            name += " 10";
+        }
+        host.os = name + " (build " + std::to_string(osv.dwBuildNumber) + ")";
+    }
+SYSTEM_INFO si{};
+GetNativeSystemInfo(&si);
+switch (si.wProcessorArchitecture) {
+    case PROCESSOR_ARCHITECTURE_AMD64: host.arch = "x64";     break;
+    case PROCESSOR_ARCHITECTURE_ARM64: host.arch = "arm64";   break;
+    case PROCESSOR_ARCHITECTURE_INTEL: host.arch = "x86";     break;
+    default:                           host.arch = "unknown"; break;
+}
+
+
+    return host;
+}
+
+// File-local helpers for the event envelope.
+namespace {
+
+// ISO8601 UTC timestamp with milliseconds, e.g. "2026-07-11T13:45:07.123Z".
+std::string current_timestamp() {
+    SYSTEMTIME st{};
+    GetSystemTime(&st);  // UTC
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+                  st.wSecond, st.wMilliseconds);
+    return buf;
+}
+
+// Monotonic, thread-safe event counter. std::atomic makes concurrent collectors
+// safe without a lock; relaxed ordering is fine for a standalone counter.
+std::uint64_t next_sequence_id() {
+    static std::atomic<std::uint64_t> counter{0};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Basename of a UTF-8 path (last component). We split on the ASCII slash bytes
+// directly, which is UTF-8-safe; std::filesystem::path::string() would re-encode
+// through the ANSI code page and mangle non-ASCII names.
+std::string basename_of(const std::string& path) {
+    const size_t slash = path.find_last_of("\\/");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+}  // namespace
+
+// Assemble a fully-enriched process_create event. See header for the contract.
+ProcessEvent build_process_event(std::uint32_t pid) {
+    ProcessEvent event;
+
+    // Envelope.
+    event.event_type  = "process_create";
+    event.timestamp   = current_timestamp();
+    event.sequence_id = next_sequence_id();
+
+    // Subject process: identity, then file-based enrichment keyed off the path.
+    event.process.pid     = pid;
+    event.process.path    = get_process_path(pid);
+    event.process.cmdline = get_process_command_line(pid);
+    if (event.process.path) {
+        event.process.name   = basename_of(*event.process.path);
+        event.process.sha256 = get_file_sha256(*event.process.path);
+        event.process.md5    = get_file_md5(*event.process.path);
+        const FileSignature sig = get_file_signature(*event.process.path);
+        event.process.is_signed = sig.is_signed;
+        event.process.signer    = sig.signer;
+    }
+
+    // Lineage, identity, host.
+    get_process_lineage(pid, event.parent, event.grandparent);
+    get_process_user(pid, event.user);
+    event.host = get_host_context();
+
+    // Behavioural flags: is_lolbin / unusual_parent are simple heuristics added in
+    // a later step; is_hollow / is_injected need memory analysis (a later concept).
+    return event;
 }
 
 }  // namespace reaperwatch
