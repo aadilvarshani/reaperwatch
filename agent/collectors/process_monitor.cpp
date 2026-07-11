@@ -22,7 +22,7 @@
 
 namespace reaperwatch {
 
-void collect_process_events() {}
+// collect_process_events() lives in etw_consumer.cpp (the live ETW acquisition).
 
 // Resolve a PID to its full image path on disk. See header for contract.
 std::optional<std::string> get_process_path(std::uint32_t pid) {
