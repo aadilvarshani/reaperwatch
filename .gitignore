@@ -65,6 +65,9 @@ venv/
 Thumbs.db
 Desktop.ini
 
+# --- Local study notes (kept out of the public repo) -------------------------
+docs/
+
 # --- Local secrets / environment (never commit) ------------------------------
 *.env
 .env
