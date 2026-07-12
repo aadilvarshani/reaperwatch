@@ -1,0 +1,55 @@
+name: build-agent
+
+# Builds the ReaperWatch agent as a standalone, static-CRT Release exe (no VC++
+# Redistributable dependency, deployable to a bare Windows lab VM).
+#
+# Every push builds and uploads a workflow artifact ("latest build"). Pushing
+# a tag matching v* additionally publishes a GitHub Release with the exe
+# attached as a permanent downloadable asset.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Release, static CRT)
+        run: cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-release
+
+      - name: Verify zero VC++ Redistributable dependency
+        shell: pwsh
+        run: |
+          $deps = dumpbin /dependents build-release/agent/reaperwatch_agent.exe | Select-String "\.dll"
+          Write-Output $deps
+          if ($deps -match "VCRUNTIME|MSVCP") {
+            Write-Error "Agent unexpectedly depends on the VC++ Redistributable -- static CRT linking regressed."
+            exit 1
+          }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reaperwatch-agent
+          path: build-release/agent/reaperwatch_agent.exe
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build-release/agent/reaperwatch_agent.exe
+          generate_release_notes: true
