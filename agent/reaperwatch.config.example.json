@@ -1,0 +1,5 @@
+{
+  "console_host": "192.168.56.1",
+  "console_port": 3000,
+  "api_key": "paste-the-key-printed-by-the-console-on-startup-here"
+}

@@ -12,6 +12,8 @@
 
 #include "event_json.h"
 #include "../transport/event_sink.h"
+#include "../transport/config.h"
+#include "../transport/http_sender.h"
 
 namespace reaperwatch {
 namespace {
@@ -59,11 +61,15 @@ void WINAPI on_event(PEVENT_RECORD record) {
         return;
     }
     // Run the full enrichment pipeline once, then fan out: a durable JSONL
-    // record for the backend to ingest, and a human-readable echo on the
-    // console. std::flush so the console output survives an abrupt exit
-    // (redirected stdout is fully buffered otherwise).
+    // record, a live push to a console if one is configured, and a
+    // human-readable echo on the console. std::flush so the console output
+    // survives an abrupt exit (redirected stdout is fully buffered otherwise).
     const ProcessEvent event = build_process_event(*pid);
-    append_event_line(to_json_line(event));
+    const std::string line = to_json_line(event);
+    append_event_line(line);
+    if (const auto cfg = get_network_config()) {
+        send_event_http(cfg->host, cfg->port, cfg->api_key, line);
+    }
     std::cout << to_json_string(event) << "\n\n" << std::flush;
 }
 
