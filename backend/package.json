@@ -1,0 +1,16 @@
+{
+  "name": "reaperwatch-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ReaperWatch console backend: SQLite storage, JSONL ingestor, detection engine, and API for the dashboard.",
+  "main": "api/server.js",
+  "scripts": {
+    "start": "node api/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

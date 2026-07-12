@@ -13,9 +13,7 @@ json opt(const std::optional<std::string>& value) {
     return value.has_value() ? json(*value) : json(nullptr);
 }
 
-}  // namespace
-
-std::string to_json_string(const ProcessEvent& e) {
+json build_json(const ProcessEvent& e) {
     json j;
 
     // Envelope.
@@ -69,7 +67,17 @@ std::string to_json_string(const ProcessEvent& e) {
         {"is_injected", e.flags.is_injected},
     };
 
-    return j.dump(2);  // pretty-print, 2-space indent
+    return j;
+}
+
+}  // namespace
+
+std::string to_json_string(const ProcessEvent& e) {
+    return build_json(e).dump(2);  // pretty-print, 2-space indent
+}
+
+std::string to_json_line(const ProcessEvent& e) {
+    return build_json(e).dump();  // compact, single line -- safe for JSON Lines
 }
 
 }  // namespace reaperwatch

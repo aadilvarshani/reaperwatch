@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReaperWatch — Endpoint Security</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ============================ SIDEBAR ============================ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">☠</div>
+        <div class="brand-text">
+          <div class="brand-name">ReaperWatch</div>
+          <div class="brand-sub">ENDPOINT SECURITY</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-group">Operations</div>
+        <a class="nav-item active" data-view="overview">
+          <span class="nav-ico">◎</span> Overview <span class="nav-badge">12</span>
+        </a>
+        <a class="nav-item" data-view="detections">
+          <span class="nav-ico">⚠</span> Detections <span class="nav-badge">247</span>
+        </a>
+        <a class="nav-item" data-view="hunt">
+          <span class="nav-ico">🔎</span> Hunt <span class="nav-badge tag-new">NEW</span>
+        </a>
+        <a class="nav-item disabled"><span class="nav-ico">🖥</span> Endpoints</a>
+        <a class="nav-item disabled"><span class="nav-ico">🌐</span> Network</a>
+
+        <div class="nav-group">Intelligence</div>
+        <a class="nav-item disabled"><span class="nav-ico">✦</span> Threat Intel</a>
+        <a class="nav-item disabled"><span class="nav-ico">▤</span> Reports</a>
+        <a class="nav-item disabled"><span class="nav-ico">⛨</span> Prevention</a>
+
+        <div class="nav-group">System</div>
+        <a class="nav-item disabled"><span class="nav-ico">⚙</span> Settings</a>
+      </nav>
+
+      <div class="sidebar-user">
+        <div class="avatar">A</div>
+        <div class="user-meta">
+          <div class="user-name">Analyst</div>
+          <div class="user-role">ReaperWatch · Local</div>
+        </div>
+        <div class="user-dots">⋮</div>
+      </div>
+    </aside>
+
+    <!-- ============================ MAIN ============================ -->
+    <div class="main">
+
+      <!-- top bar -->
+      <header class="topbar">
+        <div class="search">
+          <span class="search-ico">🔍</span>
+          <input type="text" placeholder="Search processes, hashes, signers, users…" />
+          <kbd>⌘K</kbd>
+        </div>
+        <div class="topbar-right">
+          <div class="threat-pill" id="threatLevel">
+            <span class="dot"></span> THREAT LEVEL: <b>ELEVATED</b>
+          </div>
+          <button class="icon-btn" title="Notifications">🔔<span class="notif-dot"></span></button>
+          <button class="icon-btn" id="refreshBtn" title="Refresh">⟳</button>
+          <div class="clock"><span class="live-dot"></span><span id="clock">--:--:--</span> UTC</div>
+        </div>
+      </header>
+
+      <div class="content">
+
+        <div class="demo-banner" id="demoBanner" hidden>
+          ⚠ Backend not reachable at <span class="mono">/api</span> — showing bundled sample data. Start the console with <span class="mono">npm start</span> in <span class="mono">backend/</span>.
+        </div>
+
+        <!-- ==================== OVERVIEW ==================== -->
+        <section class="view" id="view-overview">
+          <div class="page-head">
+            <div>
+              <h1>Operations Overview</h1>
+              <p class="page-sub" id="overviewSub">Sensor active on <b>1</b> endpoint · loading…</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn ghost">▾ Filter</button>
+              <button class="btn primary">＋ New Incident</button>
+            </div>
+          </div>
+
+          <!-- stat cards -->
+          <div class="stat-grid" id="statGrid"></div>
+
+          <!-- charts row -->
+          <div class="grid-2">
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Detection Volume</div>
+                  <div class="panel-sub">7-day telemetry by severity</div>
+                </div>
+                <div class="seg">
+                  <span class="seg-item active">7D</span>
+                </div>
+              </div>
+              <div class="chart-legend" id="volumeLegend"></div>
+              <div class="chart-wrap" id="volumeChart"></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Alert Breakdown</div>
+                  <div class="panel-sub">By attack category</div>
+                </div>
+              </div>
+              <div class="donut-wrap">
+                <div id="donutChart"></div>
+                <div class="donut-legend" id="donutLegend"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- feed + fleet -->
+          <div class="grid-feed">
+            <div class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Live Activity Feed <span class="live-badge"><span class="live-dot"></span>LIVE</span></div>
+                <div class="seg">
+                  <span class="seg-item active" data-feed="all">All</span>
+                  <span class="seg-item" data-feed="critical">Critical</span>
+                </div>
+              </div>
+              <table class="feed-table">
+                <thead>
+                  <tr><th>Sev</th><th>Host / Process</th><th>Detection</th><th>MITRE</th><th>Time</th></tr>
+                </thead>
+                <tbody id="feedBody"></tbody>
+              </table>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><div class="panel-title">Fleet Health</div></div>
+              <div class="fleet" id="fleet"></div>
+              <div class="panel-head" style="margin-top:22px"><div class="panel-title">Top Signers (24h)</div></div>
+              <div class="top-list" id="topSigners"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== DETECTIONS ==================== -->
+        <section class="view" id="view-detections" hidden>
+          <div class="page-head">
+            <div>
+              <h1>Detections</h1>
+              <p class="page-sub">Behavioral rule matches, MITRE ATT&CK mapped</p>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <div class="chips" id="sevChips">
+              <span class="chip active" data-sev="all">All</span>
+              <span class="chip" data-sev="critical">Critical</span>
+              <span class="chip" data-sev="high">High</span>
+              <span class="chip" data-sev="medium">Medium</span>
+            </div>
+          </div>
+          <div class="panel">
+            <table class="det-table">
+              <thead>
+                <tr><th>Sev</th><th>Rule</th><th>Process</th><th>MITRE</th><th>User</th><th>Time</th></tr>
+              </thead>
+              <tbody id="detBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ==================== HUNT ==================== -->
+        <section class="view" id="view-hunt" hidden>
+          <div class="page-head">
+            <div>
+              <h1>Hunt</h1>
+              <p class="page-sub">Query raw telemetry · click a row for the full enriched event</p>
+            </div>
+          </div>
+          <div class="hunt-bar">
+            <span class="query-prompt">❯</span>
+            <input id="huntQuery" class="query-input" spellcheck="false"
+                   value='process where true' />
+            <button class="btn primary" id="huntRun">Run</button>
+          </div>
+          <div class="hunt-meta">
+            <div class="hunt-examples" id="huntExamples"></div>
+            <div class="hunt-status" id="huntStatus"></div>
+          </div>
+          <div class="hunt-split">
+            <div class="panel hunt-results">
+              <table class="hunt-table">
+                <thead>
+                  <tr><th>Time</th><th>Process</th><th>PID</th><th>Signer</th><th>User</th></tr>
+                </thead>
+                <tbody id="huntBody"></tbody>
+              </table>
+            </div>
+            <div class="panel hunt-detail" id="huntDetail">
+              <div class="empty">Select an event to inspect its full JSON.</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <footer class="footer">
+        <span>© 2026 ReaperWatch — Endpoint Security</span>
+        <span><span class="ok-dot"></span>Sensor operational · <span class="mono">process_create</span> collector · build 0001</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/eql.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

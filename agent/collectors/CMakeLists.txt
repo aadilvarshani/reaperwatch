@@ -19,6 +19,7 @@ target_include_directories(reaperwatch_collectors PUBLIC
 # wintrust -> Authenticode verification: WinVerifyTrust
 # crypt32  -> certificate/signer extraction: CryptQueryObject, CertGetNameString
 # tdh      -> ETW event payload decoding: TdhGetProperty
+# reaperwatch_transport -> durable event sink (data/events.jsonl)
 # PUBLIC so the dependencies propagate to the final agent executable at link time.
-target_link_libraries(reaperwatch_collectors PUBLIC ntdll advapi32 bcrypt wintrust crypt32 tdh)
+target_link_libraries(reaperwatch_collectors PUBLIC ntdll advapi32 bcrypt wintrust crypt32 tdh reaperwatch_transport)
 

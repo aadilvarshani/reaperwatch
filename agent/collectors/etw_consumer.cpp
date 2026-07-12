@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "event_json.h"
+#include "../transport/event_sink.h"
 
 namespace reaperwatch {
 namespace {
@@ -57,10 +58,13 @@ void WINAPI on_event(PEVENT_RECORD record) {
     if (!pid) {
         return;
     }
-    // Run the full enrichment pipeline and emit the normalized event. std::flush
-    // so it appears immediately and survives an abrupt exit (redirected stdout is
-    // fully buffered otherwise).
-    std::cout << to_json_string(build_process_event(*pid)) << "\n\n" << std::flush;
+    // Run the full enrichment pipeline once, then fan out: a durable JSONL
+    // record for the backend to ingest, and a human-readable echo on the
+    // console. std::flush so the console output survives an abrupt exit
+    // (redirected stdout is fully buffered otherwise).
+    const ProcessEvent event = build_process_event(*pid);
+    append_event_line(to_json_line(event));
+    std::cout << to_json_string(event) << "\n\n" << std::flush;
 }
 
 // Build an EVENT_TRACE_PROPERTIES buffer for the kernel logger. The struct is

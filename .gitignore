@@ -5,6 +5,7 @@
 
 # --- Build directories (out-of-source builds) --------------------------------
 build/
+build-release/
 out/
 cmake-build-*/
 Debug/
@@ -59,6 +60,19 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# --- Node.js (console backend) ------------------------------------------------
+node_modules/
+npm-debug.log*
+
+# --- Runtime data (agent JSONL output + SQLite storage) -----------------------
+# Telemetry and the database are machine state, not source -- never tracked.
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # --- OS noise ----------------------------------------------------------------
 .DS_Store
