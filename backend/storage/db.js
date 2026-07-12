@@ -8,7 +8,9 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DATA_DIR = 'C:\\ReaperWatch\\data';
+// Overridable so tests (and alternate deployments) never have to touch the
+// real machine's live telemetry directory.
+const DATA_DIR = process.env.REAPERWATCH_DATA_DIR || 'C:\\ReaperWatch\\data';
 const DB_PATH = path.join(DATA_DIR, 'reaperwatch.db');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');

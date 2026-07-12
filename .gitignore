@@ -88,3 +88,4 @@ docs/
 *.pem
 *.key
 secrets.*
+reaperwatch.config.json
