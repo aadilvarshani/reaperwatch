@@ -56,6 +56,13 @@ third_party/      vendored dependencies (nlohmann/json)
   - Host context: hostname, true OS version (not the lying `GetVersionEx`), architecture
 - **Durable transport** — every event is appended as a JSON line to `data/events.jsonl`
   (`agent/transport/`), independent of whether anything is currently consuming it.
+- **Live network ingestion** — if `reaperwatch.config.json` (see
+  [example](agent/reaperwatch.config.example.json)) sits next to the exe, each event is also POSTed
+  straight to a console over HTTP (via WinHTTP), authenticated with a per-console key. No config
+  file present is the default: fully local-only, no network calls at all. See
+  [Network ingestion setup](#network-ingestion-setup).
+- **Self-elevating** — checks its own token on startup and relaunches itself via a UAC prompt if not
+  already Administrator (the kernel ETW session requires it), instead of failing silently.
 - **Zero-dependency Release build** — statically linked MSVC runtime, so the shipped `.exe` needs
   nothing but Windows itself (no VC++ Redistributable) and Administrator rights.
 
@@ -69,6 +76,9 @@ third_party/      vendored dependencies (nlohmann/json)
   MITRE ATT&CK technique ID (`backend/detection/rules.js`). Adding a detection means adding one
   entry, not writing a function.
 - **API** — Express endpoints for the dashboard: overview stats, event search, alerts, host info.
+- **Authenticated live ingestion** — `POST /api/ingest` accepts events pushed directly from a remote
+  agent, gated by a random key generated on first run (`data/ingest.key`, never committed). No key,
+  no acceptance — keeps independently-run agent/console pairs from ever cross-talking.
 
 ### Query language (`dashboard/js/eql.js`)
 
@@ -128,16 +138,41 @@ script hosts, `bitsadmin`, `installutil`), Office-spawned shells, unsigned binar
 ## Lab deployment
 
 The agent is the only piece that needs to run on a test/victim VM — copy the standalone `.exe`
-from a [release](https://github.com/aadilvarshani/reaperwatch/releases), run it as Administrator,
-and copy `data/events.jsonl` back to a machine running the console to review results. CI publishes
-a fresh build on every push and cuts a release on every `v*` tag.
+from a [release](https://github.com/aadilvarshani/reaperwatch/releases) and run it as Administrator
+(or just double-click; it self-elevates). CI publishes a fresh build on every push and cuts a
+release on every `v*` tag.
+
+Two ways to get its telemetry into the console:
+
+- **Live, over the network** (recommended) — see [Network ingestion setup](#network-ingestion-setup)
+  below. Detections appear in the dashboard in real time as the agent runs.
+- **Offline copy** — copy `data/events.jsonl` from the victim VM back to the console machine's own
+  `data/` folder; the ingestor picks it up automatically within a second.
+
+### Network ingestion setup
+
+1. Start the console. On first run it prints a generated key:
+   `Ingest key (put this in an agent's reaperwatch.config.json...): <key>`
+2. On the victim VM, copy [`agent/reaperwatch.config.example.json`](agent/reaperwatch.config.example.json)
+   to `reaperwatch.config.json`, next to `reaperwatch_agent.exe`, and fill in:
+   - `console_host` — the console machine's IP reachable from the victim VM (e.g. the host-only
+     adapter's address)
+   - `console_port` — `3000` by default
+   - `api_key` — the key the console printed in step 1
+3. Run the agent. Events now stream to the console live, in addition to the local JSONL log.
+
+The key is per-console and generated locally (`data/ingest.key`, gitignored) — it is never baked
+into the agent binary or the repo, so a downloaded agent does nothing over the network until it's
+explicitly pointed at a console, and a console never accepts events from an agent it didn't issue
+a key to.
 
 ## Roadmap
 
 - **Parent enrichment** — lineage currently only fills the parent's pid/name; reuse the existing
   path/hash/signature functions on `parent.pid` for full parity with the subject process.
-- **Async enrichment** — the ETW callback enriches synchronously; move to a lock-free queue with
-  worker threads so a slow hash never blocks the next event.
+- **Async enrichment** — the ETW callback enriches (and now, network-sends) synchronously; move to
+  a lock-free queue with worker threads so a slow hash or an unreachable console never blocks the
+  next event.
 - **Tri-state signature field** — `is_signed` currently can't distinguish "verified unsigned" from
   "couldn't check" (process exited before enrichment); needs to become a three-state value.
 - **Kernel driver (Phase 2)** — `PsSetCreateProcessNotifyRoutineEx2`, becoming the primary
