@@ -4,6 +4,7 @@
 #include <iostream>
 
 #include "collectors/process_monitor.h"
+#include "transport/config.h"
 
 namespace {
 
@@ -52,6 +53,16 @@ int main() {
         std::cerr << "Press Enter to exit...";
         std::cin.get();
         return 1;
+    }
+
+    // Tell the operator, unambiguously, whether events will also be pushed to
+    // a console -- there is no interactive prompt for this; it is entirely
+    // driven by the presence of reaperwatch.config.json next to this exe.
+    if (const auto cfg = reaperwatch::get_network_config()) {
+        std::cerr << "Network ingestion: sending events to " << cfg->host << ":" << cfg->port << "\n";
+    } else {
+        std::cerr << "Network ingestion: disabled (no reaperwatch.config.json next to this exe "
+                     "-- running local-only)\n";
     }
 
     // Live process telemetry: start the ETW consumer and stream a normalized
