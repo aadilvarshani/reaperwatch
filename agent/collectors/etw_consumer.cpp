@@ -1,11 +1,11 @@
 #include "process_monitor.h"
 
 #include <windows.h>
-#include <evntrace.h>  // StartTrace, EnableTraceEx2, OpenTrace, ProcessTrace
+#include <evntrace.h>  // StartTrace, KERNEL_LOGGER_NAMEW, EVENT_TRACE_FLAG_PROCESS
 #include <evntcons.h>  // EVENT_RECORD, PROCESS_TRACE_MODE_EVENT_RECORD
 #include <tdh.h>       // TdhGetProperty (decode event payloads)
 
-#include <cstring>
+#include <atomic>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -15,20 +15,23 @@
 namespace reaperwatch {
 namespace {
 
-// Microsoft-Windows-Kernel-Process {22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}.
-const GUID kKernelProcessGuid = {
-    0x22fb2cd6, 0x0e7b, 0x422b, {0xa0, 0xc7, 0x2f, 0xad, 0x1f, 0xd0, 0xe7, 0x16}};
+// The NT Kernel Logger control GUID. We start THIS session (rather than the
+// Microsoft-Windows-Kernel-Process manifest provider, which does not deliver
+// ProcessStart to a normal real-time session on recent builds) and turn on the
+// PROCESS flag -- the classic, reliable source of process create/exit events.
+const GUID kSystemTraceControlGuid = {
+    0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 
-const wchar_t kSessionName[] = L"ReaperWatchKernelProcess";
+// The kernel "Process" event GUID. Its events arrive with Opcode 1 = create,
+// 2 = exit, 3/4 = rundown of already-running processes.
+const GUID kProcessEventGuid = {
+    0x3d6fa8d0, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c}};
 
-// In the Kernel-Process manifest, ProcessStart is event id 1.
-constexpr USHORT kProcessStartEventId = 1;
+const wchar_t kSessionName[] = KERNEL_LOGGER_NAMEW;  // L"NT Kernel Logger"
 
-// Keyword selecting process start/stop events (WINEVENT_KEYWORD_PROCESS).
-constexpr ULONGLONG kProcessKeyword = 0x10;
+constexpr UCHAR kProcessCreateOpcode = 1;  // EVENT_TRACE_TYPE_START
 
-// Extract a UInt32 payload field (e.g. "ProcessID") from an event via TDH. TDH
-// resolves the field by name using the provider's registered manifest.
+// Extract a UInt32 payload field (e.g. "ProcessId") from an event via TDH.
 std::optional<std::uint32_t> get_event_u32(PEVENT_RECORD record, PCWSTR name) {
     PROPERTY_DATA_DESCRIPTOR desc{};
     desc.PropertyName = reinterpret_cast<ULONGLONG>(name);
@@ -43,28 +46,34 @@ std::optional<std::uint32_t> get_event_u32(PEVENT_RECORD record, PCWSTR name) {
 
 // ProcessTrace calls this once per event in the session.
 void WINAPI on_event(PEVENT_RECORD record) {
-    // Only react to ProcessStart events (event id 1 in the Kernel-Process manifest).
-    if (record->EventHeader.EventDescriptor.Id != kProcessStartEventId) {
+    // Only the kernel Process events, and only brand-new creations (skip exit
+    // and the startup rundown of already-running processes).
+    if (!IsEqualGUID(record->EventHeader.ProviderId, kProcessEventGuid) ||
+        record->EventHeader.EventDescriptor.Opcode != kProcessCreateOpcode) {
         return;
     }
-    // The new process's PID is a payload field; decode it via TDH.
-    const std::optional<std::uint32_t> pid = get_event_u32(record, L"ProcessID");
+
+    const std::optional<std::uint32_t> pid = get_event_u32(record, L"ProcessId");
     if (!pid) {
         return;
     }
-    // Run the full T2-T9 enrichment pipeline and emit the normalized event.
-    std::cout << to_json_string(build_process_event(*pid)) << "\n\n";
+    // Run the full enrichment pipeline and emit the normalized event. std::flush
+    // so it appears immediately and survives an abrupt exit (redirected stdout is
+    // fully buffered otherwise).
+    std::cout << to_json_string(build_process_event(*pid)) << "\n\n" << std::flush;
 }
 
-// Build an EVENT_TRACE_PROPERTIES buffer (the struct is immediately followed by
-// space for the session name). Re-zeroed each call so it is safe to reuse.
+// Build an EVENT_TRACE_PROPERTIES buffer for the kernel logger. The struct is
+// immediately followed by room for the session name; re-zeroed each call.
 std::vector<BYTE> make_session_props() {
     const size_t size = sizeof(EVENT_TRACE_PROPERTIES) + sizeof(kSessionName);
     std::vector<BYTE> buffer(size, 0);
     auto* p = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(buffer.data());
     p->Wnode.BufferSize = static_cast<ULONG>(size);
     p->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
-    p->Wnode.ClientContext = 1;  // QPC (high-resolution) timestamps
+    p->Wnode.ClientContext = 1;                 // QPC (high-resolution) timestamps
+    p->Wnode.Guid = kSystemTraceControlGuid;    // marks this as the kernel logger
+    p->EnableFlags = EVENT_TRACE_FLAG_PROCESS;  // capture process create/exit
     p->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
     p->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
     return buffer;
@@ -74,39 +83,47 @@ EVENT_TRACE_PROPERTIES* props_of(std::vector<BYTE>& b) {
     return reinterpret_cast<EVENT_TRACE_PROPERTIES*>(b.data());
 }
 
+// The active session handle, so the Ctrl+C handler can stop it on the way out.
+std::atomic<TRACEHANDLE> g_session{0};
+
+// Stop the session on Ctrl+C so we don't leave the kernel logger running.
+BOOL WINAPI on_ctrl_c(DWORD) {
+    auto b = make_session_props();
+    ControlTraceW(g_session.load(), kSessionName, props_of(b), EVENT_TRACE_CONTROL_STOP);
+    return FALSE;  // fall through to the default handler, which terminates us
+}
+
 }  // namespace
 
-// Start a real-time ETW session on the Kernel-Process provider and stream every
-// process launch through the enrichment pipeline. Blocks until the session stops.
-// Requires Administrator (kernel ETW sessions are privileged).
+// Start the kernel logger with the PROCESS flag and stream every process
+// creation through the enrichment pipeline. Blocks until the session stops.
+// Requires Administrator.
 void collect_process_events() {
-    // A previous run may have left the session running; stop any stale one first.
+    // Stop any stale kernel-logger session first.
     { auto b = make_session_props();
       ControlTraceW(0, kSessionName, props_of(b), EVENT_TRACE_CONTROL_STOP); }
 
-    // ① Controller: start our session.
-    auto start_props = make_session_props();
+    // Controller: start the kernel logger. Retry once if it already exists.
     TRACEHANDLE session = 0;
+    auto start_props = make_session_props();
     ULONG status = StartTraceW(&session, kSessionName, props_of(start_props));
+    if (status == ERROR_ALREADY_EXISTS) {
+        auto sp = make_session_props();
+        ControlTraceW(0, kSessionName, props_of(sp), EVENT_TRACE_CONTROL_STOP);
+        start_props = make_session_props();
+        status = StartTraceW(&session, kSessionName, props_of(start_props));
+    }
     if (status != ERROR_SUCCESS) {
         std::cerr << "StartTrace failed: " << status
                   << (status == ERROR_ACCESS_DENIED ? "  (run as Administrator)" : "")
                   << "\n";
         return;
     }
+    g_session = session;
+    SetConsoleCtrlHandler(on_ctrl_c, TRUE);
+    // The kernel logger is enabled via EnableFlags above -- no EnableTraceEx2.
 
-    // Subscribe the session to the Kernel-Process provider (process keyword).
-    status = EnableTraceEx2(session, &kKernelProcessGuid,
-                            EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-                            TRACE_LEVEL_INFORMATION, kProcessKeyword, 0, 0, nullptr);
-    if (status != ERROR_SUCCESS) {
-        std::cerr << "EnableTraceEx2 failed: " << status << "\n";
-        auto b = make_session_props();
-        ControlTraceW(session, kSessionName, props_of(b), EVENT_TRACE_CONTROL_STOP);
-        return;
-    }
-
-    // ② Consumer: open the session in real-time mode and attach our callback.
+    // Consumer: open the session in real-time mode and attach our callback.
     EVENT_TRACE_LOGFILEW logfile{};
     logfile.LoggerName = const_cast<LPWSTR>(kSessionName);
     logfile.ProcessTraceMode =
@@ -122,9 +139,9 @@ void collect_process_events() {
     }
 
     std::cerr << "ReaperWatch: listening for process launches (Ctrl+C to stop)...\n\n";
-    ProcessTrace(&consumer, 1, nullptr, nullptr);  // ③ blocks, driving on_event
+    ProcessTrace(&consumer, 1, nullptr, nullptr);  // blocks, driving on_event
 
-    // Cleanup (reached if the session is stopped externally).
+    // Cleanup (reached when the session is stopped, e.g. via Ctrl+C).
     CloseTrace(consumer);
     auto b = make_session_props();
     ControlTraceW(session, kSessionName, props_of(b), EVENT_TRACE_CONTROL_STOP);
