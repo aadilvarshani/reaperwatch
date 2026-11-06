@@ -62,16 +62,10 @@ struct UserContext {
     bool is_system = false;               // runs as NT AUTHORITY\SYSTEM
 };
 
-// Behavioural / threat flags. is_hollow and is_injected require memory analysis
-// added in a later concept; they stay false for now.
-struct Flags {
-    bool is_lolbin = false;               // trusted-but-abusable built-in (powershell, rundll32, ...)
-    bool unusual_parent = false;          // abnormal parent->child pair (e.g. winword.exe -> cmd.exe)
-    bool is_hollow = false;
-    bool is_injected = false;
-};
-
 // A complete, normalized process-creation event: envelope + composed payload.
+// Classification (LOLBin, unusual parent, hollowing, injection, ...) is deliberately
+// not part of this event -- that's the job of a future signature/detection engine
+// working over raw telemetry, not something the agent bakes in at capture time.
 struct ProcessEvent {
     std::string   event_type;             // always "process_create"
     std::string   timestamp;              // ISO8601 with milliseconds
@@ -82,7 +76,6 @@ struct ProcessEvent {
     GrandparentInfo grandparent;
     UserContext     user;
     HostContext     host;
-    Flags           flags;
 };
 
 }  // namespace reaperwatch

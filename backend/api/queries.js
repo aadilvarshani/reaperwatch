@@ -41,9 +41,12 @@ function getOverview(db) {
   const unsignedPrev24h = count(
     'SELECT COUNT(*) c FROM events WHERE ts >= ? AND ts < ? AND proc_signed = 0', since48h, since24h);
 
-  const lolbin24h = count('SELECT COUNT(*) c FROM events WHERE ts >= ? AND flag_is_lolbin = 1', since24h);
+  const lolbin24h = count(
+    "SELECT COUNT(*) c FROM alerts a JOIN events e ON e.id = a.event_id WHERE e.ts >= ? AND a.rule_name LIKE 'lolbin_%'",
+    since24h);
   const lolbinPrev24h = count(
-    'SELECT COUNT(*) c FROM events WHERE ts >= ? AND ts < ? AND flag_is_lolbin = 1', since48h, since24h);
+    "SELECT COUNT(*) c FROM alerts a JOIN events e ON e.id = a.event_id WHERE e.ts >= ? AND e.ts < ? AND a.rule_name LIKE 'lolbin_%'",
+    since48h, since24h);
 
   // 7-day detection volume by day + severity.
   const days = [];

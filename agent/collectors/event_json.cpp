@@ -60,13 +60,6 @@ json build_json(const ProcessEvent& e) {
         {"arch", e.host.arch},
     };
 
-    j["flags"] = {
-        {"is_lolbin", e.flags.is_lolbin},
-        {"unusual_parent", e.flags.unusual_parent},
-        {"is_hollow", e.flags.is_hollow},
-        {"is_injected", e.flags.is_injected},
-    };
-
     return j;
 }
 

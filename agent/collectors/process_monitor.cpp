@@ -24,12 +24,12 @@ namespace reaperwatch {
 
 // collect_process_events() lives in etw_consumer.cpp (the live ETW acquisition).
 
-// Resolve a PID to its full image path on disk. See header for contract.
-std::optional<std::string> get_process_path(std::uint32_t pid) {
-    // Open with the least access we need; UniqueHandle closes it automatically.
-    UniqueHandle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+// Resolve an already-open process handle to its full image path on disk. See
+// header for contract.
+std::optional<std::string> get_process_path(const UniqueHandle& process) {
     if (!process.valid()) {
-        // Process may have exited, or we lack rights; GetLastError() has details.
+        // Process may have exited before build_process_event even opened the
+        // handle; GetLastError() would have had details at open time.
         return std::nullopt;
     }
 
@@ -45,13 +45,11 @@ std::optional<std::string> get_process_path(std::uint32_t pid) {
     return narrow(buffer);  // UTF-16 -> UTF-8 for our data model
 }
 
-// Recover a process's full command line by walking its PEB. See header contract.
-// The walk is three ReadProcessMemory "hops": PEB -> parameters -> the text.
-std::optional<std::string> get_process_command_line(std::uint32_t pid) {
-    // We must READ the target's memory now, so we add PROCESS_VM_READ to the
-    // access rights we used in T2.
-    UniqueHandle process(OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid));
+// Recover a process's full command line by walking its PEB, given an
+// already-open handle (must have been opened with PROCESS_VM_READ). See header
+// for contract. The walk is three ReadProcessMemory "hops": PEB -> parameters
+// -> the text.
+std::optional<std::string> get_process_command_line(const UniqueHandle& process) {
     if (!process.valid()) {
         return std::nullopt;
     }
@@ -124,15 +122,15 @@ std::unordered_map<std::uint32_t, ProcEntry> snapshot_processes() {
     return processes;
 }
 
-// The moment a process was created, as a 64-bit timestamp (100ns ticks). Used to
-// detect PID reuse: a genuine parent must be OLDER than its child. nullopt on failure.
-std::optional<std::uint64_t> get_process_creation_time(std::uint32_t pid) {
-    UniqueHandle p(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
-    if (!p.valid()) {
+// The moment a process was created, as a 64-bit timestamp (100ns ticks), from
+// an already-open handle. Used to detect PID reuse: a genuine parent must be
+// OLDER than its child. nullopt on failure.
+std::optional<std::uint64_t> get_process_creation_time(const UniqueHandle& process) {
+    if (!process.valid()) {
         return std::nullopt;
     }
     FILETIME creation{}, exit_t{}, kernel_t{}, user_t{};
-    if (!GetProcessTimes(p.get(), &creation, &exit_t, &kernel_t, &user_t)) {
+    if (!GetProcessTimes(process.get(), &creation, &exit_t, &kernel_t, &user_t)) {
         return std::nullopt;
     }
     ULARGE_INTEGER t{};
@@ -141,11 +139,23 @@ std::optional<std::uint64_t> get_process_creation_time(std::uint32_t pid) {
     return t.QuadPart;
 }
 
+// Same, but for a pid we don't already have a handle for. Used for the parent:
+// it's a different process than the subject, so this is a genuinely separate
+// OpenProcess call -- reusing the subject's handle isn't possible here, and
+// that half of the TOCTOU race (the parent exiting mid-lookup) is out of scope
+// for the handle-consolidation this file otherwise does.
+std::optional<std::uint64_t> get_process_creation_time(std::uint32_t pid) {
+    UniqueHandle p(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+    return get_process_creation_time(p);
+}
+
 }  // namespace
 
 // Populate parent/grandparent lineage for `pid`, guarding against PID reuse.
-void get_process_lineage(std::uint32_t pid, ParentInfo& parent,
-                         GrandparentInfo& grandparent) {
+// `process` is the subject's already-open handle (reused for its creation-time
+// check below); the parent's creation-time check necessarily opens its own.
+void get_process_lineage(std::uint32_t pid, const UniqueHandle& process,
+                         ParentInfo& parent, GrandparentInfo& grandparent) {
     const auto processes = snapshot_processes();
 
     const auto child_it = processes.find(pid);
@@ -161,7 +171,7 @@ void get_process_lineage(std::uint32_t pid, ParentInfo& parent,
 
     // PID-reuse guard: a real parent must be no younger than its child. If the
     // PID was recycled, the process now holding it started later -> reject it.
-    const auto child_time = get_process_creation_time(pid);
+    const auto child_time = get_process_creation_time(process);
     const auto parent_time = get_process_creation_time(parent_pid);
     if (!child_time.has_value() || !parent_time.has_value()) {
         return;  // can't verify -> don't record an unverified parent
@@ -182,9 +192,9 @@ void get_process_lineage(std::uint32_t pid, ParentInfo& parent,
     }
 }
 
-// Populate the user/security context (name, domain, sid, is_admin, is_system).
-void get_process_user(std::uint32_t pid, UserContext& user) {
-    UniqueHandle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+// Populate the user/security context (name, domain, sid, is_admin, is_system)
+// from an already-open process handle.
+void get_process_user(const UniqueHandle& process, UserContext& user) {
     if (!process.valid()) {
         return;
     }
@@ -590,10 +600,28 @@ ProcessEvent build_process_event(std::uint32_t pid) {
     event.timestamp   = current_timestamp();
     event.sequence_id = next_sequence_id();
 
-    // Subject process: identity, then file-based enrichment keyed off the path.
-    event.process.pid     = pid;
-    event.process.path    = get_process_path(pid);
-    event.process.cmdline = get_process_command_line(pid);
+    event.process.pid = pid;
+
+    // Open ONE handle for every subject-PID enrichment step below. Previously
+    // path/cmdline/user/lineage each opened their own handle independently, so
+    // a short-lived process could survive long enough for an earlier call to
+    // succeed and still exit before a later one -- producing an inconsistent
+    // event (path present, cmdline null). Consolidating to one handle, opened
+    // as early as possible, collapses that into a single point-in-time check:
+    // either all four succeed off the one handle, or all four fail together.
+    // It does NOT fix a process that already exited before this line runs --
+    // that gap is ETW delivery/dispatch latency, upstream of this function
+    // entirely, and needs kernel-mode acquisition to close (see docs/).
+    UniqueHandle process(OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid));
+
+    event.process.path    = get_process_path(process);
+    event.process.cmdline = get_process_command_line(process);
+    get_process_lineage(pid, process, event.parent, event.grandparent);
+    get_process_user(process, event.user);
+
+    // File-based enrichment only needs the path string, not the process
+    // handle, so it's unaffected by whether the process is still alive by now.
     if (event.process.path) {
         event.process.name   = basename_of(*event.process.path);
         event.process.sha256 = get_file_sha256(*event.process.path);
@@ -603,13 +631,8 @@ ProcessEvent build_process_event(std::uint32_t pid) {
         event.process.signer    = sig.signer;
     }
 
-    // Lineage, identity, host.
-    get_process_lineage(pid, event.parent, event.grandparent);
-    get_process_user(pid, event.user);
     event.host = get_host_context();
 
-    // Behavioural flags: is_lolbin / unusual_parent are simple heuristics added in
-    // a later step; is_hollow / is_injected need memory analysis (a later concept).
     return event;
 }
 

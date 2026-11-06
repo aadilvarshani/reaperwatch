@@ -5,32 +5,38 @@
 #include <string>
 
 #include "process_event.h"
+#include "win_utils.h"
 
 namespace reaperwatch {
 
 void collect_process_events();
 
-// Given a process id, return that process's full image path on disk as UTF-8
-// (e.g. "C:\\Windows\\System32\\notepad.exe"). Returns std::nullopt if the
-// process can't be opened or queried (it may have exited, or access denied).
-std::optional<std::string> get_process_path(std::uint32_t pid);
+// Given an already-open handle to a process, return its full image path on
+// disk as UTF-8 (e.g. "C:\\Windows\\System32\\notepad.exe"). Returns
+// std::nullopt if the handle is invalid or the query fails.
+std::optional<std::string> get_process_path(const UniqueHandle& process);
 
-// Given a process id, return the full command line it was launched with, as
-// UTF-8, by reading the target's PEB. Returns std::nullopt on any failure
-// (exited, access denied, or a memory read fails). NOTE: 64-bit targets only for
-// now; reading a 32-bit (WOW64) process's command line is a later addition.
-std::optional<std::string> get_process_command_line(std::uint32_t pid);
+// Given an already-open handle to a process (opened with PROCESS_VM_READ),
+// return the full command line it was launched with, as UTF-8, by reading the
+// target's PEB. Returns std::nullopt on any failure (invalid handle, or a
+// memory read fails). NOTE: 64-bit targets only for now; reading a 32-bit
+// (WOW64) process's command line is a later addition.
+std::optional<std::string> get_process_command_line(const UniqueHandle& process);
 
-// Populate `parent` (pid + name) and `grandparent` (pid + name) for the given
-// process, using a process snapshot and guarding against PID reuse via
-// creation-time validation. Fields that can't be resolved keep their defaults.
-void get_process_lineage(std::uint32_t pid, ParentInfo& parent,
-                         GrandparentInfo& grandparent);
+// Populate `parent` (pid + name) and `grandparent` (pid + name) for `pid`,
+// using a process snapshot and guarding against PID reuse via creation-time
+// validation. `process` is the subject's already-open handle, reused for the
+// subject's own creation-time check (the parent is a different process, so
+// its creation time still requires its own handle). Fields that can't be
+// resolved keep their defaults.
+void get_process_lineage(std::uint32_t pid, const UniqueHandle& process,
+                         ParentInfo& parent, GrandparentInfo& grandparent);
 
-// Populate `user` (name, domain, sid, is_admin, is_system) for the given process
-// by reading its access token. Fields that can't be resolved keep their defaults
-// (e.g. if the token can't be opened because the target is higher-privileged).
-void get_process_user(std::uint32_t pid, UserContext& user);
+// Populate `user` (name, domain, sid, is_admin, is_system) from the given
+// already-open process handle's access token. Fields that can't be resolved
+// keep their defaults (e.g. if the token can't be opened because the target
+// is higher-privileged).
+void get_process_user(const UniqueHandle& process, UserContext& user);
 
 // Compute the SHA256 / MD5 of a file (given its UTF-8 path), returned as a
 // lowercase hex string. std::nullopt if the file can't be read or hashed. The

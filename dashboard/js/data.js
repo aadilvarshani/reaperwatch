@@ -108,8 +108,6 @@ function ev(seq, time, name, path, pid, cmdline, parentName, parentPid, user, si
             sid: isSystem ? "S-1-5-18" : "S-1-5-21-1004336348-1177238915-682003330-1001",
             is_admin: isSystem, is_system: isSystem },
     host: { hostname: "LPT-DEV-MORGAN-07", os: "Windows 11 (build 26200)", arch: "x64" },
-    flags: { is_lolbin: /powershell|cmd|rundll32|mshta|certutil|wscript/i.test(name),
-             unusual_parent: false, is_hollow: false, is_injected: false },
   };
 }
 function fakehash(s) {

@@ -7,7 +7,7 @@
 
 function insertEvent(db, evt) {
   const p = evt.process || {}, par = evt.parent || {}, gp = evt.grandparent || {},
-        u = evt.user || {}, h = evt.host || {}, f = evt.flags || {};
+        u = evt.user || {}, h = evt.host || {};
 
   const stmt = db.prepare(`
     INSERT INTO events (
@@ -17,9 +17,8 @@ function insertEvent(db, evt) {
       grandparent_pid, grandparent_name,
       user_name, user_domain, user_sid, user_is_admin, user_is_system,
       host_hostname, host_os, host_arch,
-      flag_is_lolbin, flag_unusual_parent, flag_is_hollow, flag_is_injected,
       raw_json
-    ) VALUES (?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?, ?)
+    ) VALUES (?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?, ?,?,?, ?)
   `);
 
   const info = stmt.run(
@@ -30,7 +29,6 @@ function insertEvent(db, evt) {
     gp.pid ?? null, gp.name ?? null,
     u.name ?? null, u.domain ?? null, u.sid ?? null, u.is_admin ? 1 : 0, u.is_system ? 1 : 0,
     h.hostname ?? null, h.os ?? null, h.arch ?? null,
-    f.is_lolbin ? 1 : 0, f.unusual_parent ? 1 : 0, f.is_hollow ? 1 : 0, f.is_injected ? 1 : 0,
     JSON.stringify(evt),
   );
   return Number(info.lastInsertRowid);

@@ -43,11 +43,6 @@ CREATE TABLE IF NOT EXISTS events (
   host_os          TEXT,
   host_arch        TEXT,
 
-  flag_is_lolbin      INTEGER,
-  flag_unusual_parent INTEGER,
-  flag_is_hollow      INTEGER,
-  flag_is_injected    INTEGER,
-
   raw_json         TEXT NOT NULL
 );
 
