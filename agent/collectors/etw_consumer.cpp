@@ -2,8 +2,9 @@
 
 #include <windows.h>
 #include <evntrace.h>  // StartTrace, KERNEL_LOGGER_NAMEW, EVENT_TRACE_FLAG_PROCESS
-#include <evntcons.h>  // EVENT_RECORD, PROCESS_TRACE_MODE_EVENT_RECORD
+#include <evntcons.h>  // EVENT_RECORD, PROCESS_TRACE_MODE_EVENT_RECORD, EVENT_HEADER_FLAG_*
 #include <tdh.h>       // TdhGetProperty (decode event payloads)
+#include <sddl.h>      // ConvertSidToStringSidW
 
 #include <atomic>
 #include <iostream>
@@ -47,6 +48,82 @@ std::optional<std::uint32_t> get_event_u32(PEVENT_RECORD record, PCWSTR name) {
     return value;
 }
 
+// Fetch a payload property's raw bytes via TDH's two-call pattern (size, then
+// data). Shared by every typed helper below that isn't a plain fixed-size
+// integer. A field missing from this event version is normal -- nullopt, not
+// an error (RW-2).
+std::optional<std::vector<BYTE>> get_event_raw(PEVENT_RECORD record, PCWSTR name) {
+    PROPERTY_DATA_DESCRIPTOR desc{};
+    desc.PropertyName = reinterpret_cast<ULONGLONG>(name);
+    desc.ArrayIndex = ULONG_MAX;
+    ULONG size = 0;
+    if (TdhGetPropertySize(record, 0, nullptr, 1, &desc, &size) != ERROR_SUCCESS ||
+        size == 0) {
+        return std::nullopt;
+    }
+    std::vector<BYTE> buffer(size);
+    if (TdhGetProperty(record, 0, nullptr, 1, &desc, size, buffer.data()) !=
+        ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+    return buffer;
+}
+
+// ImageFileName is an ANSI string (RW-1). Trim the trailing NUL(s) TDH includes
+// in the byte count.
+std::optional<std::string> get_event_ansi_string(PEVENT_RECORD record, PCWSTR name) {
+    const auto raw = get_event_raw(record, name);
+    if (!raw) {
+        return std::nullopt;
+    }
+    std::string s(reinterpret_cast<const char*>(raw->data()), raw->size());
+    while (!s.empty() && s.back() == '\0') {
+        s.pop_back();
+    }
+    return s;
+}
+
+// CommandLine is a Unicode string (RW-1); narrow it to UTF-8 at this boundary,
+// same rule as every other string in our data model.
+std::optional<std::string> get_event_wide_string(PEVENT_RECORD record, PCWSTR name) {
+    const auto raw = get_event_raw(record, name);
+    if (!raw || raw->size() < sizeof(wchar_t)) {
+        return std::nullopt;
+    }
+    std::wstring w(reinterpret_cast<const wchar_t*>(raw->data()),
+                    raw->size() / sizeof(wchar_t));
+    while (!w.empty() && w.back() == L'\0') {
+        w.pop_back();
+    }
+    return narrow(w);
+}
+
+// UserSID (TDH_INTYPE_WBEMSID, RW-1): a TOKEN_USER-shaped header immediately
+// followed by the raw SID. We don't hand-parse the SID itself -- we skip a
+// fixed, documented header (a SID_AND_ATTRIBUTES: one pointer + one ULONG,
+// so 8 bytes on a 32-bit logging process, 16 with 64-bit pointer alignment
+// padding) and hand the rest straight to ConvertSidToStringSidW.
+std::optional<std::string> get_event_sid_string(PEVENT_RECORD record, PCWSTR name) {
+    auto raw = get_event_raw(record, name);  // not const: ConvertSidToStringSidW needs a non-const PSID
+    if (!raw) {
+        return std::nullopt;
+    }
+    const bool is_32bit_header =
+        (record->EventHeader.Flags & EVENT_HEADER_FLAG_32_BIT_HEADER) != 0;
+    const size_t header_size = is_32bit_header ? 8 : 16;
+    if (raw->size() <= header_size) {
+        return std::nullopt;
+    }
+    LPWSTR sid_str = nullptr;
+    const PSID sid = static_cast<PSID>(raw->data() + header_size);
+    if (!ConvertSidToStringSidW(sid, &sid_str)) {
+        return std::nullopt;
+    }
+    const std::wstring w(sid_str);
+    LocalFree(sid_str);
+    return narrow(w);
+}
+
 // ProcessTrace calls this once per event in the session.
 void WINAPI on_event(PEVENT_RECORD record) {
     // Only the kernel Process events, and only brand-new creations (skip exit
@@ -60,11 +137,25 @@ void WINAPI on_event(PEVENT_RECORD record) {
     if (!pid) {
         return;
     }
+
+    // Decode every field the kernel gave us in this one payload (RW-2) --
+    // not just the PID, the way this callback used to. See RawProcessFacts.
+    RawProcessFacts facts;
+    facts.pid             = *pid;
+    facts.parent_pid       = get_event_u32(record, L"ParentId");
+    facts.session_id       = get_event_u32(record, L"SessionId");
+    facts.sid              = get_event_sid_string(record, L"UserSID");
+    facts.image_file_name  = get_event_ansi_string(record, L"ImageFileName");
+    facts.command_line     = get_event_wide_string(record, L"CommandLine");
+    facts.header_pid       = record->EventHeader.ProcessId;
+    facts.header_tid       = record->EventHeader.ThreadId;
+    facts.header_timestamp = static_cast<std::uint64_t>(record->EventHeader.TimeStamp.QuadPart);
+
     // Run the full enrichment pipeline once, then fan out: a durable JSONL
     // record, a live push to a console if one is configured, and a
     // human-readable echo on the console. std::flush so the console output
     // survives an abrupt exit (redirected stdout is fully buffered otherwise).
-    const ProcessEvent event = build_process_event(*pid);
+    const ProcessEvent event = build_process_event(facts);
     const std::string line = to_json_line(event);
     append_event_line(line);
     if (const auto cfg = get_network_config()) {

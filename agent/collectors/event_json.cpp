@@ -13,6 +13,10 @@ json opt(const std::optional<std::string>& value) {
     return value.has_value() ? json(*value) : json(nullptr);
 }
 
+json opt_u32(const std::optional<std::uint32_t>& value) {
+    return value.has_value() ? json(*value) : json(nullptr);
+}
+
 json build_json(const ProcessEvent& e) {
     json j;
 
@@ -27,6 +31,7 @@ json build_json(const ProcessEvent& e) {
         {"name", e.process.name},
         {"path", opt(e.process.path)},
         {"cmdline", opt(e.process.cmdline)},
+        {"session_id", opt_u32(e.process.session_id)},
         {"sha256", opt(e.process.sha256)},
         {"md5", opt(e.process.md5)},
         {"signed", e.process.is_signed},

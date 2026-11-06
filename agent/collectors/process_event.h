@@ -32,6 +32,7 @@ struct ProcessInfo {
     std::string   name;                   // image file name, e.g. "cmd.exe"
     std::optional<std::string> path;      // full path, e.g. "C:\\Windows\\System32\\cmd.exe"
     std::optional<std::string> cmdline;   // full command line
+    std::optional<std::uint32_t> session_id; // ETW payload's SessionId
     std::optional<std::string> sha256;    // hex, lowercase
     std::optional<std::string> md5;       // hex, lowercase
     bool is_signed = false;               // is_signed because `signed` is a C++ keyword; JSON key is "signed"
@@ -60,6 +61,29 @@ struct UserContext {
     std::string sid;                      // e.g. "S-1-5-21-...-1013"
     bool is_admin = false;                // user is a local administrator
     bool is_system = false;               // runs as NT AUTHORITY\SYSTEM
+};
+
+// Facts decoded directly from a kernel-logger process-start event's ETW payload
+// and header, before any live-process enrichment runs. Per RW-1: the kernel
+// captured these synchronously, inside the creator's own context, at creation
+// time -- they can't go missing just because the process has since exited, the
+// way a later live re-query can. See
+// docs/phase-1.5/learning/etw-process-event-anatomy.md.
+struct RawProcessFacts {
+    std::uint32_t pid = 0;                        // ProcessId
+    std::optional<std::uint32_t> parent_pid;      // ParentId -- the *claimed* parent;
+                                                   // RW-3 asks whether this is the real creator
+    std::optional<std::uint32_t> session_id;      // SessionId
+    std::optional<std::string>   sid;             // UserSID, string form (e.g. "S-1-5-18")
+    std::optional<std::string>   image_file_name; // ImageFileName (short name, not a full path)
+    std::optional<std::string>   command_line;    // CommandLine
+
+    // Header facts: free, ETW fills these in regardless of the payload. Not
+    // consumed yet -- RW-3's spike needs them to test whether the process that
+    // was running when this event was logged is the real creator.
+    std::uint32_t header_pid = 0;        // EventHeader.ProcessId
+    std::uint32_t header_tid = 0;        // EventHeader.ThreadId
+    std::uint64_t header_timestamp = 0;  // EventHeader.TimeStamp, raw FILETIME ticks
 };
 
 // A complete, normalized process-creation event: envelope + composed payload.

@@ -21,6 +21,11 @@ std::optional<std::string> get_process_path(const UniqueHandle& process);
 // target's PEB. Returns std::nullopt on any failure (invalid handle, or a
 // memory read fails). NOTE: 64-bit targets only for now; reading a 32-bit
 // (WOW64) process's command line is a later addition.
+//
+// Not the primary command-line source for build_process_event anymore (RW-2:
+// the ETW payload's CommandLine wins that race). Kept for the argument-spoofing
+// test later in this epic, which needs this delayed, independent PEB read to
+// compare against the payload's value.
 std::optional<std::string> get_process_command_line(const UniqueHandle& process);
 
 // Populate `parent` (pid + name) and `grandparent` (pid + name) for `pid`,
@@ -61,9 +66,12 @@ FileSignature get_file_signature(const std::string& path);
 // it rather than per event.
 HostContext get_host_context();
 
-// Assemble a fully-enriched process_create event for the given PID: run every
-// enrichment step (path, command line, lineage, user, hashes, signature, host)
-// and stamp the envelope (event_type, timestamp, sequence_id).
-ProcessEvent build_process_event(std::uint32_t pid);
+// Assemble a fully-enriched process_create event from facts already decoded
+// from the ETW payload/header (pid, parent pid, session, SID, image name,
+// command line -- see RawProcessFacts). Only what the payload can't carry
+// (full path, hashes, signature, lineage names/grandparent, token details)
+// still comes from a live query, off one handle opened as early as possible.
+// Also stamps the envelope (event_type, timestamp, sequence_id).
+ProcessEvent build_process_event(const RawProcessFacts& facts);
 
 }  // namespace reaperwatch

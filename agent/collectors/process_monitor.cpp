@@ -581,18 +581,11 @@ std::uint64_t next_sequence_id() {
     return counter.fetch_add(1, std::memory_order_relaxed);
 }
 
-// Basename of a UTF-8 path (last component). We split on the ASCII slash bytes
-// directly, which is UTF-8-safe; std::filesystem::path::string() would re-encode
-// through the ANSI code page and mangle non-ASCII names.
-std::string basename_of(const std::string& path) {
-    const size_t slash = path.find_last_of("\\/");
-    return slash == std::string::npos ? path : path.substr(slash + 1);
-}
-
 }  // namespace
 
-// Assemble a fully-enriched process_create event. See header for the contract.
-ProcessEvent build_process_event(std::uint32_t pid) {
+// Assemble a fully-enriched process_create event from already-decoded ETW
+// facts. See header for the contract.
+ProcessEvent build_process_event(const RawProcessFacts& facts) {
     ProcessEvent event;
 
     // Envelope.
@@ -600,30 +593,48 @@ ProcessEvent build_process_event(std::uint32_t pid) {
     event.timestamp   = current_timestamp();
     event.sequence_id = next_sequence_id();
 
-    event.process.pid = pid;
+    // Identity facts the kernel already handed us, captured synchronously at
+    // creation time (RW-1/RW-2): these populate even for a process that's
+    // already gone by the time anything below runs.
+    event.process.pid        = facts.pid;
+    event.process.name       = facts.image_file_name.value_or("");
+    event.process.cmdline    = facts.command_line;
+    event.process.session_id = facts.session_id;
 
-    // Open ONE handle for every subject-PID enrichment step below. Previously
-    // path/cmdline/user/lineage each opened their own handle independently, so
-    // a short-lived process could survive long enough for an earlier call to
-    // succeed and still exit before a later one -- producing an inconsistent
-    // event (path present, cmdline null). Consolidating to one handle, opened
-    // as early as possible, collapses that into a single point-in-time check:
-    // either all four succeed off the one handle, or all four fail together.
-    // It does NOT fix a process that already exited before this line runs --
-    // that gap is ETW delivery/dispatch latency, upstream of this function
-    // entirely, and needs kernel-mode acquisition to close (see docs/).
+    // Open ONE handle for every subject-PID enrichment step below that the
+    // payload can't carry (full path, hashes, signature). Previously this
+    // handle was also used to re-derive identity live; it no longer needs to
+    // be -- identity above already came from the payload, so there's nothing
+    // left for this handle to race on.
     UniqueHandle process(OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid));
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, facts.pid));
 
-    event.process.path    = get_process_path(process);
-    event.process.cmdline = get_process_command_line(process);
-    get_process_lineage(pid, process, event.parent, event.grandparent);
+    event.process.path = get_process_path(process);
+    get_process_lineage(facts.pid, process, event.parent, event.grandparent);
     get_process_user(process, event.user);
+
+    // Payload wins (RW-1's rule) for anything the live calls above also tried
+    // to resolve themselves: the parent PID and the SID were captured
+    // synchronously, at creation, and can't lose the race those live calls can.
+    //
+    // Known gap: get_process_lineage() above still derives its OWN parent pid
+    // internally (via a live snapshot) to resolve parent.name/grandparent, and
+    // that internally-derived pid is what gets named -- not necessarily
+    // facts.parent_pid, which we overwrite parent.pid with below. In the rare
+    // case those two disagree (a live-snapshot race), parent.name can end up
+    // attached to the wrong pid for one event. Passing the authoritative
+    // parent pid into get_process_lineage itself is the real fix; deferred to
+    // the lineage epic (RW-17+), which already owns that function's contract.
+    if (facts.parent_pid) {
+        event.parent.pid = *facts.parent_pid;
+    }
+    if (facts.sid) {
+        event.user.sid = *facts.sid;
+    }
 
     // File-based enrichment only needs the path string, not the process
     // handle, so it's unaffected by whether the process is still alive by now.
     if (event.process.path) {
-        event.process.name   = basename_of(*event.process.path);
         event.process.sha256 = get_file_sha256(*event.process.path);
         event.process.md5    = get_file_md5(*event.process.path);
         const FileSignature sig = get_file_signature(*event.process.path);
