@@ -19,10 +19,12 @@
 namespace reaperwatch {
 namespace {
 
-// The NT Kernel Logger control GUID. We start THIS session (rather than the
-// Microsoft-Windows-Kernel-Process manifest provider, which does not deliver
-// ProcessStart to a normal real-time session on recent builds) and turn on the
-// PROCESS flag -- the classic, reliable source of process create/exit events.
+// The NT Kernel Logger control GUID. We start THIS session and turn on the
+// PROCESS flag -- the classic source of process create/exit events. In Phase 1
+// the Microsoft-Windows-Kernel-Process manifest provider gave us no ProcessStart
+// as Administrator; that was an observation, not a documented limit (Velociraptor
+// says it needs SYSTEM), and we never retested it because RW-3 showed this
+// session's EventHeader.ProcessId already names the real creator (ADR-0010).
 const GUID kSystemTraceControlGuid = {
     0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 
